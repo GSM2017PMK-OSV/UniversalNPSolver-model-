@@ -1,0 +1,32 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+from matplotlib.animation import FuncAnimation
+
+# Параметры модели
+np.random.seed(42)
+n_points = 500
+
+# Генерация данных: пространство решений 3-SAT
+x = np.random.rand(n_points)
+y = np.random.rand(n_points)
+z = np.sin(10 * x) * np.cos(10 * y)  # Имитация сложной поверхности
+
+# Настройка 3D-графика
+fig = plt.figure(figsize=(10, 8))
+ax = fig.add_subplot(111, projection='3d')
+ax.set_title("3D-модель пространства решений NP-задачи", fontsize=14)
+ax.set_xlabel('Переменная X')
+ax.set_ylabel('Переменная Y')
+ax.set_zlabel('Сложность')
+
+# Визуализация
+scatter = ax.scatter(x, y, z, c=z, cmap='viridis', s=20)
+
+# Добавление цветовой шкалы
+cbar = fig.colorbar(scatter, shrink=0.5)
+cbar.set_label('Уровень сложности')
+
+plt.tight_layout()
+plt.savefig('3d_model.png')  # Сохранить картинку
+plt.show()

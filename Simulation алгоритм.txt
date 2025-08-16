@@ -1,0 +1,253 @@
+Альтернативные подходы
+NeuroSAT (2018) — GNN для предсказания выполнимости.
+
+G2SAT (генерация SAT-задач с помощью GAN).
+
+Graph-Q-SAT (обучение с подкреплением для поиска решений).
+
+1. Архитектура модели
+Используем:
+
+Graph Neural Network (GNN) с механизмом Message Passing.
+
+Гибридный подход: предсказание выполнимости + вероятности присваивания переменных.
+
+Интеграция с классическим SAT-солвером (например, PySAT).
+
+2. Полный код
+Установка зависимостей
+bash
+pip install torch torch-geometric numpy pysat
+Импорты
+python
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch_geometric.data import Data, DataLoader
+from torch_geometric.nn import MessagePassing
+from torch_geometric.utils import to_dense_adj
+from pysat.formula import CNF
+from pysat.solvers import Solver
+1. Преобразование CNF в граф (PyG Data)
+python
+def cnf_to_graph(cnf):
+    clauses = cnf.clauses
+    num_vars = cnf.nv
+    
+    # Уникальные клаузы (исключаем дубликаты)
+    unique_clauses = [tuple(sorted(clause)) for clause in clauses]
+    unique_clauses = list(set(unique_clauses))
+    num_clauses = len(unique_clauses)
+    
+    # Нумерация узлов:
+    # [0 ... num_vars-1] — переменные
+    # [num_vars ... num_vars + num_clauses - 1] — клаузы
+    
+    edge_index = []
+    edge_attr = []
+    
+    for clause_idx, clause in enumerate(unique_clauses):
+        clause_node = num_vars + clause_idx
+        
+        for lit in clause:
+            var = abs(lit) - 1  # переменные в CNF нумеруются с 1
+            polarity = 1 if lit > 0 else -1
+            
+            # Добавляем ребро между переменной и клаузой
+            edge_index.append([var, clause_node])
+            edge_attr.append(polarity)
+    
+    edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous()
+    edge_attr = torch.tensor(edge_attr, dtype=torch.float).unsqueeze(1)
+    
+    # Инициализация признаков узлов
+    x_var = torch.zeros(num_vars, 2)
+    x_var[:, 0] = 1  # метка переменной
+    
+    x_clause = torch.zeros(num_clauses, 2)
+    x_clause[:, 1] = 1  # метка клаузы
+    
+    x = torch.cat([x_var, x_clause], dim=0)
+    
+    data = Data(x=x, edge_index=edge_index, edge_attr=edge_attr)
+    return data
+2. Архитектура GNN (Message Passing)
+python
+class SATGNN(MessagePassing):
+    def __init__(self, hidden_dim=64, num_layers=3):
+        super(SATGNN, self).__init__(aggr='add')
+        
+        self.hidden_dim = hidden_dim
+        self.num_layers = num_layers
+        
+        # Инициализация эмбеддингов
+        self.var_embed = nn.Linear(2, hidden_dim)
+        self.clause_embed = nn.Linear(2, hidden_dim)
+        self.edge_embed = nn.Linear(1, hidden_dim)
+        
+        # Message Passing слои
+        self.mlp_msg = nn.Sequential(
+            nn.Linear(2 * hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim)
+        )
+        
+        # Обновление состояний узлов
+        self.gru = nn.GRU(hidden_dim, hidden_dim)
+        
+        # Предсказание выполнимости
+        self.sat_predictor = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 1),
+            nn.Sigmoid()
+        )
+        
+        # Предсказание присваивания переменных
+        self.var_predictor = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 1),
+            nn.Sigmoid()
+        )
+    
+    def forward(self, data):
+        x, edge_index, edge_attr = data.x, data.edge_index, data.edge_attr
+        
+        # Инициализация эмбеддингов
+        h = torch.zeros(x.size(0), self.hidden_dim).to(x.device)
+        h[:data.num_vars] = self.var_embed(x[:data.num_vars])
+        h[data.num_vars:] = self.clause_embed(x[data.num_vars:])
+        
+        # Message Passing
+        for _ in range(self.num_layers):
+            msg = self.propagate(edge_index, x=h, edge_attr=edge_attr)
+            h, _ = self.gru(msg.unsqueeze(0), h.unsqueeze(0))
+            h = h.squeeze(0)
+        
+        # Предсказание выполнимости (усреднение по клаузам)
+        clause_nodes = h[data.num_vars:]
+        sat_logit = self.sat_predictor(clause_nodes.mean(dim=0))
+        
+        # Предсказание присваивания переменных
+        var_nodes = h[:data.num_vars]
+        var_probs = self.var_predictor(var_nodes)
+        
+        return sat_logit, var_probs
+    
+    def message(self, x_j, edge_attr):
+        # x_j — эмбеддинги соседей
+        edge_feat = self.edge_embed(edge_attr)
+        msg = torch.cat([x_j, edge_feat], dim=1)
+        return self.mlp_msg(msg)
+3. Обучение модели
+python
+def train(model, dataloader, optimizer, criterion, device='cuda'):
+    model.train()
+    total_loss = 0
+    
+    for data in dataloader:
+        data = data.to(device)
+        optimizer.zero_grad()
+        
+        sat_logit, var_probs = model(data)
+        
+        # Лосс для выполнимости (бинарная классификация)
+        loss_sat = criterion(sat_logit, data.y_sat.float())
+        
+        # Лосс для присваивания переменных (если есть GT)
+        if hasattr(data, 'y_var'):
+            loss_var = F.binary_cross_entropy(var_probs, data.y_var.float())
+            loss = loss_sat + loss_var
+        else:
+            loss = loss_sat
+        
+        loss.backward()
+        optimizer.step()
+        total_loss += loss.item()
+    
+    return total_loss / len(dataloader)
+4. Генерация датасета
+python
+def generate_dataset(num_samples=1000, min_vars=10, max_vars=50, min_clauses=5, max_clauses=100):
+    dataset = []
+    
+    for _ in range(num_samples):
+        # Случайная CNF формула
+        n_vars = np.random.randint(min_vars, max_vars + 1)
+        n_clauses = np.random.randint(min_clauses, max_clauses + 1)
+        
+        cnf = CNF()
+        for _ in range(n_clauses):
+            clause_len = np.random.randint(1, 4)
+            clause = np.random.choice(range(1, n_vars + 1), clause_len, replace=False)
+            signs = np.random.choice([-1, 1], clause_len)
+            clause = [var * sign for var, sign in zip(clause, signs)]
+            cnf.append(clause)
+        
+        # Проверка выполнимости с помощью PySAT
+        solver = Solver(name='glucose3')
+        solver.append_formula(cnf.clauses)
+        is_sat = solver.solve()
+        solver.delete()
+        
+        # Преобразование в граф
+        data = cnf_to_graph(cnf)
+        data.y_sat = torch.tensor([float(is_sat)])
+        
+        dataset.append(data)
+    
+    return dataset
+5. Инференс и интеграция с SAT-солвером
+python
+def predict_and_solve(model, cnf, device='cuda'):
+    model.eval()
+    data = cnf_to_graph(cnf).to(device)
+    
+    with torch.no_grad():
+        sat_prob, var_probs = model(data)
+        is_sat_pred = sat_prob.item() > 0.5
+        
+        if is_sat_pred:
+            # Используем предсказанные вероятности для инициализации SAT-солвера
+            solver = Solver(name='glucose3')
+            solver.append_formula(cnf.clauses)
+            
+            # Приоритет переменных на основе предсказаний модели
+            var_order = torch.argsort(var_probs.squeeze(), descending=True).cpu().numpy()
+            
+            # Пробуем присваивать значения
+            for var_idx in var_order:
+                var = var_idx + 1
+                solver.add_clause([var if var_probs[var_idx] > 0.5 else -var])
+            
+            is_sat = solver.solve()
+            assignment = solver.get_model() if is_sat else None
+            solver.delete()
+            
+            return is_sat, assignment
+        else:
+            return False, None
+6. Пример использования
+python
+if __name__ == "__main__":
+    # Генерация датасета
+    dataset = generate_dataset(num_samples=1000)
+    dataloader = DataLoader(dataset, batch_size=32, shuffle=True)
+    
+    # Инициализация модели
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    model = SATGNN(hidden_dim=64, num_layers=3).to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+    criterion = nn.BCELoss()
+    
+    # Обучение
+    for epoch in range(50):
+        loss = train(model, dataloader, optimizer, criterion, device)
+        print(f"Epoch {epoch}, Loss: {loss:.4f}")
+    
+    # Тестирование на новой формуле
+    test_cnf = CNF(from_clauses=[[1, 2], [-1, 3], [-2, -3]])
+    is_sat, assignment = predict_and_solve(model, test_cnf, device)
+    print(f"SAT: {is_sat}, Assignment: {assignment}")

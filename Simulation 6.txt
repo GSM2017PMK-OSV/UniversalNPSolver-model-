@@ -1,0 +1,32 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib import style
+
+style.use('ggplot')
+
+# Данные для графиков
+n = np.arange(1, 50)  # Размер задачи
+time_p = n ** 2       # P-задачи (полиномиальное время)
+time_np = 2 ** (n/3)  # NP-задачи (экспоненциальное время)
+homology = np.log(n)  # Ранг гомологий
+
+# Настройка графиков
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+
+# График 1: Время выполнения
+ax1.plot(n, time_p, label='P-задачи (n²)', color='green')
+ax1.plot(n, time_np, label='NP-задачи (2^(n/3))', color='red')
+ax1.set_title('Сравнение времени решения')
+ax1.set_xlabel('Размер задачи (n)')
+ax1.set_ylabel('Время выполнения')
+ax1.legend()
+
+# График 2: Топологические свойства
+ax2.plot(n, homology, label='Ранг H₁ (log(n))', color='blue')
+ax2.set_title('Топологическая сложность')
+ax2.set_xlabel('Размер задачи (n)')
+ax2.set_ylabel('Значение инварианта')
+ax2.legend()
+
+plt.tight_layout()
+plt.show()

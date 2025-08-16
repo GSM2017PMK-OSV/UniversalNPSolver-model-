@@ -1,0 +1,98 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+from matplotlib.animation import FuncAnimation
+import os
+
+# Создаем папку для сохранения на рабочем столе
+os.makedirs(os.path.expanduser('~/Desktop/np_solver_3d'), exist_ok=True)
+
+# Генерация данных спирали
+def generate_spiral():
+    t = np.linspace(0, 20*np.pi, 1000)
+    r = 100 * (1 - t/(20*np.pi))
+    
+    # Параметры спирали (31° наклон, 180° поворот)
+    tilt = np.radians(31)
+    rotation = np.radians(180)
+    
+    x = r * np.sin(t + rotation)
+    y = r * np.cos(t + rotation) * np.cos(tilt) - t*0.5*np.sin(tilt)
+    z = r * np.cos(t + rotation) * np.sin(tilt) + t*0.5*np.cos(tilt)
+    
+    return x, y, z
+
+# Создаем 3D анимацию
+def create_animation():
+    fig = plt.figure(figsize=(10, 8))
+    ax = fig.add_subplot(111, projection='3d')
+    
+    # Генерируем данные
+    x, y, z = generate_spiral()
+    
+    # Настройка границ
+    margin = 20
+    ax.set_xlim(min(x)-margin, max(x)+margin)
+    ax.set_ylim(min(y)-margin, max(y)+margin)
+    ax.set_zlim(min(z)-margin, max(z)+margin)
+    
+    # Создаем элементы визуализации
+    line, = ax.plot([], [], [], 'b-', alpha=0.6)
+    point = ax.scatter([], [], [], c='r', s=50)
+    p_points = ax.scatter([], [], [], c='g', s=80, label='P-точки')
+    np_points = ax.scatter([], [], [], c='m', s=100, marker='^', label='NP-точки')
+    
+    # Добавляем легенду
+    ax.legend()
+    
+    # Функция инициализации
+    def init():
+        line.set_data([], [])
+        line.set_3d_properties([])
+        point._offsets3d = ([], [], [])
+        p_points._offsets3d = ([], [], [])
+        np_points._offsets3d = ([], [], [])
+        return line, point, p_points, np_points
+    
+    # Функция анимации
+    def animate(i):
+        # Обновляем спираль
+        line.set_data(x[:i], y[:i])
+        line.set_3d_properties(z[:i])
+        
+        # Обновляем текущую позицию
+        point._offsets3d = ([x[i]], [y[i]], [z[i]])
+        
+        # Добавляем P-точки после 1/3 анимации
+        if i > len(x)//3:
+            p_indices = [100, 400, 700]  # Индексы P-точек
+            p_x = [x[idx] for idx in p_indices]
+            p_y = [y[idx] for idx in p_indices]
+            p_z = [z[idx] for idx in p_indices]
+            p_points._offsets3d = (p_x, p_y, p_z)
+        
+        # Добавляем NP-точки после 2/3 анимации
+        if i > 2*len(x)//3:
+            np_indices = [185, 236, 38, 451]  # Индексы NP-точек
+            np_x = [x[idx] for idx in np_indices]
+            np_y = [y[idx] for idx in np_indices]
+            np_z = [z[idx] for idx in np_indices]
+            np_points._offsets3d = (np_x, np_y, np_z)
+        
+        return line, point, p_points, np_points
+    
+    # Создаем анимацию
+    anim = FuncAnimation(
+        fig, animate, init_func=init,
+        frames=len(x), interval=20,
+        blit=True
+    )
+    
+    # Сохраняем анимацию
+    save_path = os.path.expanduser('~/Desktop/np_solver_3d/animation.gif')
+    anim.save(save_path, writer='pillow', fps=30, dpi=100)
+    print(f"Анимация успешно сохранена: {save_path}")
+    plt.close()
+
+if __name__ == "__main__":
+    create_animation()
